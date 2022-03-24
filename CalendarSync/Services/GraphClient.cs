@@ -1,4 +1,5 @@
-﻿using Azure.Identity;
+﻿using Azure.Core;
+using Azure.Identity;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
@@ -7,6 +8,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Threading.Tasks;
 
 namespace CalendarSync
@@ -17,6 +19,7 @@ namespace CalendarSync
         private readonly ILogger _logger;
         private readonly string _prefix;
         private readonly GraphServiceClient _graphClient;
+        private readonly HttpClient _httpClient;
 
         public GraphClient(IConfiguration config, ILogger<GraphClient> logger)
         {
@@ -33,6 +36,11 @@ namespace CalendarSync
             var clientSecretCredential = new ClientSecretCredential(
                 config["TenantId"], config["ClientId"], config["ClientSecret"], options);
             _graphClient = new GraphServiceClient(clientSecretCredential, scopes);
+
+            var ctx = new TokenRequestContext(scopes: new[] { "https://graph.microsoft.com/.default" });
+            var token = clientSecretCredential.GetToken(ctx).Token;
+            _httpClient = new HttpClient();
+            _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
         }
 
         public async Task<IEnumerable<User>> GetMTRAccounts()
@@ -57,7 +65,12 @@ namespace CalendarSync
             _logger.LogInformation($"Getting user '{email}'");
             try
             {
-                return await _graphClient.Users[email].Request()?.GetAsync();
+                var user = await _graphClient.Users[email].Request()?.GetAsync();
+                var response = await _httpClient.GetAsync($"https://graph.microsoft.com/v1.0/users/{user.Id}/mailboxSettings");
+                var mailboxSettingsJson = await response.Content.ReadAsStringAsync();
+                var mailboxSettings = JObject.Parse(mailboxSettingsJson);
+                user.MailboxSettings = new MailboxSettings() { TimeZone = mailboxSettings.GetValue("timeZone").ToString() };
+                return user;
             }
             catch (Exception ex)
             {
@@ -103,7 +116,7 @@ namespace CalendarSync
             return (result, deltaLink);
         }
 
-        public async Task AddCalendarEvent(string email, Event calendarEvent)
+        public async Task AddCalendarEvent(string email, string timeZone, Event calendarEvent)
         {
             var isMTRAccount = email.StartsWith(_prefix, StringComparison.InvariantCultureIgnoreCase);
             var isAppointnment = !calendarEvent.Attendees.Any();
@@ -124,14 +137,14 @@ namespace CalendarSync
                         },
                         Start = new DateTimeTimeZone
                         {
-                            DateTime = calendarEvent.Start.DateTime,
-                            TimeZone = calendarEvent.Start.TimeZone
+                            DateTime = calendarEvent.Start.DateTime + "Z",
+                            TimeZone = timeZone
 
                         },
                         End = new DateTimeTimeZone
                         {
-                            DateTime = calendarEvent.End.DateTime,
-                            TimeZone = calendarEvent.End.TimeZone
+                            DateTime = calendarEvent.End.DateTime + "Z",
+                            TimeZone = timeZone
                         },
                         Location = new Location(),
                         Attendees = new List<Attendee>()
@@ -187,7 +200,7 @@ namespace CalendarSync
 
     public interface IGraphClient
     {
-        Task AddCalendarEvent(string email, Event calendarEvent);
+        Task AddCalendarEvent(string email, string timeZone, Event calendarEvent);
         Task DeleteCalendarEvent(string email, Event eventToDelete);
         Task<(IEnumerable<Event>, string)> GetCalendarEvents(string userId);
         Task<IEnumerable<User>> GetMTRAccounts();

@@ -1,6 +1,7 @@
 using Microsoft.Azure.WebJobs;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -83,6 +84,9 @@ namespace CalendarSync
 
         private async Task SyncUserCalendarActivity(DeltaLink deltaLink, ILogger log)
         {
+            var user = _tableClient.GetUsers().SingleOrDefault(p=> p.RowKey.Equals(deltaLink.RowKey, StringComparison.InvariantCultureIgnoreCase));
+            if (user == null) return;
+
             var events = await _graphClient.GetCalendarEvents(deltaLink.RowKey);
             var mtrEvents = await _graphClient.GetCalendarEvents(deltaLink.MTREmail);
 
@@ -105,7 +109,7 @@ namespace CalendarSync
                     if (!mtrEvents.Item1.Any(x => x.Matches(@event)))
                     {
                         log.LogInformation("Adding Event: {0}", @event.Subject);
-                        await _graphClient.AddCalendarEvent(deltaLink.MTREmail, @event);
+                        await _graphClient.AddCalendarEvent(deltaLink.MTREmail, user.TimeZone, @event);
                     }
             }
         }

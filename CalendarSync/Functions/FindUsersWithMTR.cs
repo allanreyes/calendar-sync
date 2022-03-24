@@ -41,7 +41,8 @@ namespace CalendarSync
                     {
                         PartitionKey = partitionKey,
                         RowKey = userAccount.Mail,
-                        MTREmail = mtrAccount.Mail
+                        MTREmail = mtrAccount.Mail,
+                        TimeZone = userAccount.MailboxSettings.TimeZone
                     });
                 }
             }
