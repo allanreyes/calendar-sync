@@ -10,21 +10,21 @@ namespace CalendarSync
     public class FindUsersWithMTR
     {
         private readonly IGraphClient _graphClient;
-        private readonly ITableClient _tableClient;
+        private readonly ITableService _tableService;
 
         private readonly string _prefix;
 
-        public FindUsersWithMTR(IGraphClient graphClient, ITableClient tableClient, IConfiguration config)
+        public FindUsersWithMTR(IGraphClient graphClient, ITableService tableService, IConfiguration config)
         {
             _graphClient = graphClient;
-            _tableClient = tableClient;
+            _tableService = tableService;
             _prefix = config["Prefix"];
         }
 
         [FunctionName(nameof(FindUsersWithMTR))]
         public async Task Run([TimerTrigger("0 */10 * * * *", RunOnStartup = true)] TimerInfo myTimer, ILogger log)
         {
-            await _tableClient.TruncateUsersTable();
+            await _tableService.TruncateUsersTable();
 
             var mtrAccounts = await _graphClient.GetMTRAccounts();
             var users = new List<UsersWithMTR>();
@@ -41,13 +41,12 @@ namespace CalendarSync
                     {
                         PartitionKey = partitionKey,
                         RowKey = userAccount.Mail,
-                        MTREmail = mtrAccount.Mail,
-                        TimeZone = userAccount.MailboxSettings.TimeZone
+                        MTREmail = mtrAccount.Mail
                     });
                 }
             }
 
-            await _tableClient.AddUsers(users);
+            await _tableService.AddUsers(users);
         }
     }
 }

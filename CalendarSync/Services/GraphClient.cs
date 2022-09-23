@@ -3,6 +3,8 @@ using Azure.Identity;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
+using Microsoft.Graph.TermStore;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
@@ -20,12 +22,14 @@ namespace CalendarSync
         private readonly string _prefix;
         private readonly GraphServiceClient _graphClient;
         private readonly HttpClient _httpClient;
+        private readonly ITableService _tableService;
 
-        public GraphClient(IConfiguration config, ILogger<GraphClient> logger)
+        public GraphClient(IConfiguration config, ILogger<GraphClient> logger, ITableService tableService)
         {
             _config = config;
             _prefix = config["Prefix"];
             _logger = logger;
+            _tableService = tableService;
 
             var scopes = new[] { "https://graph.microsoft.com/.default" };
 
@@ -65,12 +69,7 @@ namespace CalendarSync
             _logger.LogInformation($"Getting user '{email}'");
             try
             {
-                var user = await _graphClient.Users[email].Request()?.GetAsync();
-                var response = await _httpClient.GetAsync($"https://graph.microsoft.com/v1.0/users/{user.Id}/mailboxSettings");
-                var mailboxSettingsJson = await response.Content.ReadAsStringAsync();
-                var mailboxSettings = JObject.Parse(mailboxSettingsJson);
-                user.MailboxSettings = new MailboxSettings() { TimeZone = mailboxSettings.GetValue("timeZone").ToString() };
-                return user;
+                return await _graphClient.Users[email].Request()?.GetAsync();
             }
             catch (Exception ex)
             {
@@ -116,47 +115,58 @@ namespace CalendarSync
             return (result, deltaLink);
         }
 
-        public async Task AddCalendarEvent(string email, string timeZone, Event calendarEvent)
+        public async Task<string> AddCalendarEvent(string email, Event calendarEvent)
         {
-            var isMTRAccount = email.StartsWith(_prefix, StringComparison.InvariantCultureIgnoreCase);
-            var isAppointnment = !calendarEvent.Attendees.Any();
-            var isPrivate = calendarEvent.Sensitivity == Sensitivity.Private;
-            var isEmptySubject = calendarEvent?.Subject == null;
+            if (!email.StartsWith(_prefix, StringComparison.InvariantCultureIgnoreCase))
+                return $"Account {email} is not an MTR account";
 
-            if (isMTRAccount && !isAppointnment && !isPrivate && !isEmptySubject)
+            if (calendarEvent?.Subject == null)
+                return $"(Empty Subject)";
+
+            if (calendarEvent.Attendees.Count() <= 1 && calendarEvent?.IsOrganizer == true)
+                return $"{calendarEvent.Subject} (Appointment)";
+
+            if (calendarEvent.Sensitivity == Sensitivity.Private)
+                return $"{calendarEvent.Subject} (Private)";
+
+            if (calendarEvent?.IsOnlineMeeting == false)
+                return $"{calendarEvent?.Subject} (Not an Online meeting)";
+
+            try
             {
-                try
+                var @event = new Event
                 {
-                    var @event = new Event
+                    Subject = calendarEvent.Subject,
+                    Body = new ItemBody
                     {
-                        Subject = calendarEvent.Subject,
-                        Body = new ItemBody
-                        {
-                            ContentType = calendarEvent.Body.ContentType,
-                            Content = calendarEvent.Body.Content
-                        },
-                        Start = new DateTimeTimeZone
-                        {
-                            DateTime = calendarEvent.Start.DateTime + "Z",
-                            TimeZone = timeZone
+                        ContentType = calendarEvent.Body.ContentType,
+                        Content = calendarEvent.Body.Content
+                    },
+                    Start = new DateTimeTimeZone
+                    {
+                        DateTime = TimeZoneInfo.ConvertTimeFromUtc(
+                            DateTime.Parse(calendarEvent.Start.DateTime),
+                            TimeZoneInfo.FindSystemTimeZoneById(calendarEvent.OriginalStartTimeZone)).ToString(),
+                        TimeZone = calendarEvent.OriginalStartTimeZone
+                    },
+                    End = new DateTimeTimeZone
+                    {
+                        DateTime = TimeZoneInfo.ConvertTimeFromUtc(
+                            DateTime.Parse(calendarEvent.End.DateTime),
+                            TimeZoneInfo.FindSystemTimeZoneById(calendarEvent.OriginalEndTimeZone)).ToString(),
+                        TimeZone = calendarEvent.OriginalEndTimeZone
+                    },
+                    Location = new Location(),
+                    Attendees = new List<Attendee>()
+                };
 
-                        },
-                        End = new DateTimeTimeZone
-                        {
-                            DateTime = calendarEvent.End.DateTime + "Z",
-                            TimeZone = timeZone
-                        },
-                        Location = new Location(),
-                        Attendees = new List<Attendee>()
-                    };
-
-                    await _graphClient.Users[email].Calendar.Events.Request().AddAsync(@event);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, ex.Message);
-                }
+                await _graphClient.Users[email].Calendar.Events.Request().AddAsync(@event);
             }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, ex.Message);
+            }
+            return null;
         }
 
         public async Task DeleteCalendarEvent(string email, Event eventToDelete)
@@ -175,36 +185,40 @@ namespace CalendarSync
             }
         }
 
-        public async Task<string> RefreshDeltaLink(string deltaLink)
+        public async Task<DeltaLink> RefreshDeltaLink(DeltaLink deltaLink)
         {
             try
             {
-                HttpRequestMessage hrm = new HttpRequestMessage(HttpMethod.Get, deltaLink);
+                HttpRequestMessage hrm = new HttpRequestMessage(HttpMethod.Get, deltaLink.DeltaLinkURL);
                 await _graphClient.AuthenticationProvider.AuthenticateRequestAsync(hrm);
                 HttpResponseMessage response = await _graphClient.HttpProvider.SendAsync(hrm);
                 var responseString = await response.Content.ReadAsStringAsync();
                 var data = JObject.Parse(responseString);
-                var hasChanges = ((JArray)data["value"]).Count > 0;
-                if (hasChanges)
+                deltaLink.DeltaLinkURL = data["@odata.deltaLink"].ToString();
+
+                var deltaEvents = (JArray)data["value"];
+                if (deltaEvents.Any()) // Has changes
                 {
-                    return data["@odata.deltaLink"].ToString();
+                    deltaLink.IsOutOfSync = true;
+                    var eventDetails = deltaEvents.Select(e => new { Subject = e["subject"], Organizer = e["organizer"] });
+                    await _tableService.LogDeltaLinkChange(deltaLink.RowKey, JsonConvert.SerializeObject(eventDetails));
                 }
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, ex.Message);
             }
-            return null;
+            return deltaLink;
         }
     }
 
     public interface IGraphClient
     {
-        Task AddCalendarEvent(string email, string timeZone, Event calendarEvent);
+        Task<string> AddCalendarEvent(string email, Event calendarEvent);
         Task DeleteCalendarEvent(string email, Event eventToDelete);
         Task<(IEnumerable<Event>, string)> GetCalendarEvents(string userId);
         Task<IEnumerable<User>> GetMTRAccounts();
         Task<User> GetUser(string email);
-        Task<string> RefreshDeltaLink(string deltaLink);
+        Task<DeltaLink> RefreshDeltaLink(DeltaLink deltaLink);
     }
 }

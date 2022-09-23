@@ -9,7 +9,7 @@ namespace CalendarSync
         public override void Configure(IFunctionsHostBuilder builder)
         {
             builder.Services.AddSingleton<IGraphClient, GraphClient>();
-            builder.Services.AddSingleton<ITableClient, TableClient>();
+            builder.Services.AddSingleton<ITableService, TableService>();
         }
     }
 }
