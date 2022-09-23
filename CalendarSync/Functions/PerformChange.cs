@@ -23,12 +23,10 @@ namespace CalendarSync
 
         [FunctionName(nameof(PerformChange))]
         public async Task TimerStart(
-            [TimerTrigger("*/30 * * * * *")] TimerInfo myTimer,
+            [TimerTrigger("*/5 * * * * *")] TimerInfo myTimer,
             ExecutionContext context,
             ILogger log)
         {
-            log.LogInformation($"Started function PerformChange with ID = '{context.InvocationId}'.");
-
             var deltaLinks = _tableService.GetDeltaLinks();
             foreach (var deltaLink in deltaLinks.Where(d => d.IsOutOfSync))
             {
@@ -39,8 +37,6 @@ namespace CalendarSync
                 deltaLink.IsOutOfSync = false;
                 await _tableService.UpsertDeltaLink(deltaLink);
             }
-
-            log.LogInformation($"Completed function PerformChange with ID = '{context.InvocationId}'.");
         }     
 
         private async Task<string> SyncUserCalendarActivity(DeltaLink deltaLink)

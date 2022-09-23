@@ -81,11 +81,13 @@ namespace CalendarSync
         public async Task<(IEnumerable<Event>, string)> GetCalendarEvents(string userId)
         {
             _logger.LogInformation($"Getting calendar events of '{userId}'");
+            var queryStartDate = DateTime.Now.AddDays(Convert.ToInt32(_config["DaysAgo"]));
+            var queryEndDate = DateTime.Now.AddDays(Convert.ToInt32(_config["DaysFromToday"]));
 
             var options = new List<QueryOption>()
                 {
-                    new QueryOption("startDateTime", DateTime.Now.AddDays(Convert.ToInt32(_config["DaysAgo"])).ToString("o")),
-                    new QueryOption("endDateTime", DateTime.Now.AddDays(Convert.ToInt32(_config["DaysFromToday"])).ToString("o"))
+                    new QueryOption("startDateTime", queryStartDate.ToString("o")),
+                    new QueryOption("endDateTime", queryEndDate.ToString("o"))
                 };
 
             var page = await _graphClient.Users[userId].CalendarView.Delta().Request(options).GetAsync();
@@ -157,7 +159,8 @@ namespace CalendarSync
                         TimeZone = calendarEvent.OriginalEndTimeZone
                     },
                     Location = new Location(),
-                    Attendees = new List<Attendee>()
+                    Attendees = new List<Attendee>(),
+                    Recurrence = calendarEvent.Recurrence
                 };
 
                 await _graphClient.Users[email].Calendar.Events.Request().AddAsync(@event);

@@ -21,12 +21,10 @@ namespace CalendarSync
 
         [FunctionName(nameof(DetectChange))]
         public async Task TimerStart(
-            [TimerTrigger("*/30 * * * * *")] TimerInfo myTimer,
+            [TimerTrigger("*/20 * * * * *")] TimerInfo myTimer,
             ExecutionContext context,
             ILogger log)
         {
-            log.LogInformation($"Started function DetectChange with ID = '{context.InvocationId}'.");
-
             var users = _tableClient.GetUsers();
             var deltaLinks = _tableClient.GetDeltaLinks();
 
@@ -52,8 +50,6 @@ namespace CalendarSync
                 }
                 await _tableClient.UpsertDeltaLink(deltaLink);
             }
-
-            log.LogInformation($"Completed function DetectChange with ID = '{context.InvocationId}'.");
         }
     }
 }

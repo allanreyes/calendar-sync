@@ -22,7 +22,7 @@ namespace CalendarSync
         }
 
         [FunctionName(nameof(FindUsersWithMTR))]
-        public async Task Run([TimerTrigger("0 */10 * * * *", RunOnStartup = true)] TimerInfo myTimer, ILogger log)
+        public async Task Run([TimerTrigger("0 0 3 * * *", RunOnStartup = true)] TimerInfo myTimer, ILogger log)
         {
             await _tableService.TruncateUsersTable();
 
