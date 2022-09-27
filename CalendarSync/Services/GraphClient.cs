@@ -125,7 +125,7 @@ namespace CalendarSync
             if (calendarEvent?.Subject == null)
                 return $"(Empty Subject)";
 
-            if (calendarEvent.Attendees.Count() <= 1 && calendarEvent?.IsOrganizer == true)
+            if (calendarEvent.Attendees.Count() == 0 && calendarEvent?.IsOrganizer == true)
                 return $"{calendarEvent.Subject} (Appointment)";
 
             if (calendarEvent.Sensitivity == Sensitivity.Private)
