@@ -3,7 +3,6 @@ using Azure.Identity;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
-using Microsoft.Graph.TermStore;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
@@ -47,35 +46,45 @@ namespace CalendarSync
             _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
         }
 
-        public async Task<IEnumerable<User>> GetMTRAccounts()
+        public async Task<List<UsersWithMTR>> GetMTRUsers()
         {
             _logger.LogInformation($"Finding email address that start with '{_prefix}'");
-            try
-            {
-                return await _graphClient.Users.Request()
-                                            .Filter($"startswith(mail, '{_prefix}')")
-                                            .Select(x => new { x.DisplayName, x.Id, x.Mail })
-                                            .GetAsync();
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, ex.Message);
-                return Enumerable.Empty<User>();
-            }
-        }
 
-        public async Task<User> GetUser(string email)
-        {
-            _logger.LogInformation($"Getting user '{email}'");
-            try
+            var users = new List<UsersWithMTR>();
+            var batch = new BatchRequestContent();
+
+            var mtrUsers = await _graphClient.Users.Request()
+                                .Filter($"startswith(mail, '{_prefix}')")
+                                .Select(x => new { x.Id, x.Mail })
+                                .GetAsync();
+
+            foreach (var user in mtrUsers)
             {
-                return await _graphClient.Users[email].Request()?.GetAsync();
+                var userEmail = user.Mail.Substring(_prefix.Length);
+                batch.AddBatchRequestStep(new BatchRequestStep(user.Id, _graphClient.Users[userEmail].Request().Select(x => new { x.Mail }).GetHttpRequestMessage()));
             }
-            catch (Exception ex)
+
+            var result = await _graphClient.Batch.Request().PostAsync(batch);
+
+            foreach (var mtr in mtrUsers)
             {
-                _logger.LogWarning(ex, ex.Message);
-                return null;
+                try
+                {
+                    var userAccount = await result.GetResponseByIdAsync<User>(mtr.Id);
+                    users.Add(new UsersWithMTR()
+                    {
+                        PartitionKey = "mtr",
+                        RowKey = userAccount.Mail,
+                        MTREmail = mtr.Mail
+                    });
+                }
+                catch (ServiceException ex)
+                {
+                    _logger.LogWarning($"Get user failed: {ex.Error.Message}");
+                }
             }
+
+            return users;
         }
 
         public async Task<(IEnumerable<Event>, string)> GetCalendarEvents(string userId)
@@ -220,8 +229,7 @@ namespace CalendarSync
         Task<string> AddCalendarEvent(string email, Event calendarEvent);
         Task DeleteCalendarEvent(string email, Event eventToDelete);
         Task<(IEnumerable<Event>, string)> GetCalendarEvents(string userId);
-        Task<IEnumerable<User>> GetMTRAccounts();
-        Task<User> GetUser(string email);
+        Task<List<UsersWithMTR>> GetMTRUsers();
         Task<DeltaLink> RefreshDeltaLink(DeltaLink deltaLink);
     }
 }

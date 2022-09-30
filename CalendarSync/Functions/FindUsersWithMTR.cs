@@ -1,8 +1,5 @@
 using Microsoft.Azure.WebJobs;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using System;
-using System.Collections.Generic;
 using System.Threading.Tasks;
 
 namespace CalendarSync
@@ -14,38 +11,17 @@ namespace CalendarSync
 
         private readonly string _prefix;
 
-        public FindUsersWithMTR(IGraphClient graphClient, ITableService tableService, IConfiguration config)
+        public FindUsersWithMTR(IGraphClient graphClient, ITableService tableService)
         {
             _graphClient = graphClient;
             _tableService = tableService;
-            _prefix = config["Prefix"];
         }
 
         [FunctionName(nameof(FindUsersWithMTR))]
         public async Task Run([TimerTrigger("0 0 3 * * *", RunOnStartup = true)] TimerInfo myTimer, ILogger log)
         {
             await _tableService.TruncateUsersTable();
-
-            var mtrAccounts = await _graphClient.GetMTRAccounts();
-            var users = new List<UsersWithMTR>();
-            var partitionKey = Guid.NewGuid().ToString();
-
-            foreach (var mtrAccount in mtrAccounts)
-            {
-                var userEmail = mtrAccount.Mail.Substring(_prefix.Length);
-                var userAccount = await _graphClient.GetUser(userEmail);
-
-                if (userAccount != null)
-                {
-                    users.Add(new UsersWithMTR()
-                    {
-                        PartitionKey = partitionKey,
-                        RowKey = userAccount.Mail,
-                        MTREmail = mtrAccount.Mail
-                    });
-                }
-            }
-
+            var users = await _graphClient.GetMTRUsers();
             await _tableService.AddUsers(users);
         }
     }
